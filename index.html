@@ -34,8 +34,9 @@
         </label>
 
         <div id="qr-container" class="mt-8 hidden flex-col items-center w-full">
-            <div class="p-2 border border-gray-100 rounded-xl shadow-sm">
-                <canvas id="qr-canvas" class="w-64 h-64"></canvas>
+            <div class="p-2 border border-gray-100 rounded-xl shadow-sm min-w-[272px] min-h-[272px] flex items-center justify-center">
+                <!-- Switched to img to prevent Canvas WebGL context collisions on fast updates -->
+                <img id="qr-img" class="w-64 h-64 object-contain" alt="QR Frame" />
             </div>
             <p id="send-status" class="mt-4 text-sm text-gray-600 font-mono tracking-tight"></p>
             <p class="text-xs text-gray-400 mt-1">Locked at 15 FPS for low-end compatibility</p>
@@ -70,11 +71,11 @@
         
         // Sender constraints
         const FPS = 15;
-        const CHUNK_SIZE = 300; // Small size ensures QR isn't too dense for budget cameras
+        const CHUNK_SIZE = 300; 
         
         let chunks = [];
         let currentChunkIdx = 0;
-        let sendInterval = null;
+        let isBroadcasting = false;
         let fileName = '';
         let fileType = '';
 
@@ -138,13 +139,22 @@
                 const end = Math.min(start + CHUNK_SIZE, bytes.length);
                 const chunkBytes = bytes.slice(start, end);
                 const b64 = bytesToBase64(chunkBytes);
-                // Payload format: FQR | ID | Total | Index | Base64 | FileName | MimeType
                 chunks.push(`FQR|${fileId}|${totalChunks}|${i}|${b64}|${fileName}|${fileType}`);
             }
             
             document.getElementById('qr-container').classList.remove('hidden');
             document.getElementById('qr-container').classList.add('flex');
             document.getElementById('send-status').textContent = `Ready: ${chunks.length} chunks`;
+            
+            // Render the first frame statically so it's not blank before pressing start
+            if (chunks.length > 0) {
+                try {
+                    const url = await QRCode.toDataURL(chunks[0], { width: 300, margin: 2, errorCorrectionLevel: 'L' });
+                    document.getElementById('qr-img').src = url;
+                } catch (err) {
+                    console.error("Initial render failed", err);
+                }
+            }
         });
 
         document.getElementById('btn-start-send').addEventListener('click', startBroadcast);
@@ -156,29 +166,43 @@
             document.getElementById('btn-stop-send').classList.remove('hidden');
             
             currentChunkIdx = 0;
-            sendInterval = setInterval(renderNextQR, 1000 / FPS);
+            isBroadcasting = true;
+            broadcastLoop(); // Start async recursive loop
         }
 
         function stopBroadcast() {
-            if (sendInterval) clearInterval(sendInterval);
-            sendInterval = null;
+            isBroadcasting = false;
             document.getElementById('btn-start-send').classList.remove('hidden');
             document.getElementById('btn-stop-send').classList.add('hidden');
         }
 
-        function renderNextQR() {
+        // Use async/await and setTimeout instead of setInterval to prevent rendering overlap and event loop flooding
+        async function broadcastLoop() {
+            if (!isBroadcasting) return;
+
             const text = chunks[currentChunkIdx];
-            QRCode.toCanvas(document.getElementById('qr-canvas'), text, {
-                width: 300,
-                margin: 2,
-                color: { dark: '#000000', light: '#ffffff' },
-                errorCorrectionLevel: 'L'
-            }, (error) => {
-                if (error) console.error(error);
-            });
             
-            document.getElementById('send-status').textContent = `Transmitting: ${currentChunkIdx + 1} / ${chunks.length}`;
-            currentChunkIdx = (currentChunkIdx + 1) % chunks.length;
+            try {
+                // toDataURL is much safer than toCanvas for high-frequency updates
+                const url = await QRCode.toDataURL(text, {
+                    width: 300,
+                    margin: 2,
+                    color: { dark: '#000000', light: '#ffffff' },
+                    errorCorrectionLevel: 'L'
+                });
+                
+                document.getElementById('qr-img').src = url;
+                document.getElementById('send-status').textContent = `Transmitting: ${currentChunkIdx + 1} / ${chunks.length}`;
+                
+                currentChunkIdx = (currentChunkIdx + 1) % chunks.length;
+            } catch (err) {
+                console.error("Frame generation error:", err);
+            }
+            
+            // Schedule the next frame ONLY after this one has successfully processed
+            if (isBroadcasting) {
+                setTimeout(broadcastLoop, 1000 / FPS);
+            }
         }
 
         function bytesToBase64(bytes) {
@@ -210,9 +234,9 @@
             html5QrCode = new Html5Qrcode("reader");
             html5QrCode.start(
                 { facingMode: "environment" },
-                { fps: 30, qrbox: { width: 250, height: 250 } }, // Scanner checks frames at 30fps to capture the 15fps source smoothly
+                { fps: 30, qrbox: { width: 250, height: 250 } }, 
                 onScanSuccess,
-                (errorMessage) => { /* Ignore frame noise */ }
+                (errorMessage) => { /* Ignored */ }
             ).catch(err => {
                 alert("Camera error: " + err);
                 stopScanner();
