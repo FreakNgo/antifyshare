@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minimal QR Transfer</title>
+    <!-- Tailwind CSS for minimalist, bright styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- QR Code Generator -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+    <!-- HTML5 QR Code Scanner -->
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <style>
+        body { font-family: 'Inter', system-ui, sans-serif; background: #ffffff; color: #000000; }
+        .hidden-view { display: none !important; }
+    </style>
+</head>
+<body class="max-w-md mx-auto p-6 flex flex-col min-h-screen">
+    <header class="mb-8 text-center">
+        <h1 class="text-2xl font-light tracking-wide">QR Transfer</h1>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <div class="flex border border-gray-200 rounded-lg p-1 mb-8 text-sm">
+        <button id="btn-tab-send" class="flex-1 py-2 bg-black text-white rounded-md transition-colors">Send</button>
+        <button id="btn-tab-receive" class="flex-1 py-2 text-gray-500 rounded-md transition-colors">Receive</button>
+    </div>
+
+    <!-- Sender View -->
+    <div id="view-send" class="flex flex-col items-center flex-1">
+        <label class="w-full border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-gray-500 transition-colors">
+            <span class="text-gray-500 font-medium" id="file-name-label">Tap to select a file</span>
+            <input type="file" id="file-input" class="hidden">
+        </label>
+
+        <div id="qr-container" class="mt-8 hidden flex-col items-center w-full">
+            <div class="p-2 border border-gray-100 rounded-xl shadow-sm">
+                <canvas id="qr-canvas" class="w-64 h-64"></canvas>
+            </div>
+            <p id="send-status" class="mt-4 text-sm text-gray-600 font-mono tracking-tight"></p>
+            <p class="text-xs text-gray-400 mt-1">Locked at 15 FPS for low-end compatibility</p>
+            
+            <button id="btn-start-send" class="mt-6 w-full py-3 bg-black text-white rounded-lg font-medium">Start Broadcast</button>
+            <button id="btn-stop-send" class="mt-2 w-full py-3 bg-gray-100 text-black rounded-lg font-medium hidden">Stop Broadcast</button>
+        </div>
+    </div>
+
+    <!-- Receiver View -->
+    <div id="view-receive" class="hidden-view flex-col items-center flex-1 w-full">
+        <div id="reader" class="w-full overflow-hidden rounded-xl border border-gray-200 shadow-sm bg-gray-50"></div>
+        
+        <div id="receive-progress-container" class="w-full mt-6 hidden">
+            <div class="flex justify-between text-sm mb-2 font-mono text-gray-600">
+                <span id="receive-status">Receiving...</span>
+                <span id="receive-percentage">0%</span>
+            </div>
+            <div class="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                <div id="receive-bar" class="h-full bg-black w-0 transition-all duration-100"></div>
+            </div>
+        </div>
+        
+        <button id="btn-start-receive" class="mt-8 w-full py-3 bg-black text-white rounded-lg font-medium">Start Scanner</button>
+        <button id="btn-stop-receive" class="mt-2 w-full py-3 bg-red-50 text-red-600 rounded-lg font-medium hidden">Stop Scanner</button>
+        <button id="btn-download" class="mt-6 w-full py-3 bg-black text-white rounded-lg font-medium hidden">Save File</button>
+    </div>
+
+    <script>
+        // State variables
+        let mode = 'send';
+        
+        // Sender constraints
+        const FPS = 15;
+        const CHUNK_SIZE = 300; // Small size ensures QR isn't too dense for budget cameras
+        
+        let chunks = [];
+        let currentChunkIdx = 0;
+        let sendInterval = null;
+        let fileName = '';
+        let fileType = '';
+
+        // Receiver state
+        let html5QrCode = null;
+        let receivedChunks = {};
+        let expectedTotal = 0;
+        let currentFileId = null;
+
+        // UI Tabs Initialization
+        const viewSend = document.getElementById('view-send');
+        const viewReceive = document.getElementById('view-receive');
+        const btnTabSend = document.getElementById('btn-tab-send');
+        const btnTabReceive = document.getElementById('btn-tab-receive');
+
+        btnTabSend.addEventListener('click', () => switchTab('send'));
+        btnTabReceive.addEventListener('click', () => switchTab('receive'));
+
+        function switchTab(newMode) {
+            mode = newMode;
+            if (mode === 'send') {
+                btnTabSend.style.backgroundColor = 'black';
+                btnTabSend.style.color = 'white';
+                btnTabReceive.style.backgroundColor = 'transparent';
+                btnTabReceive.style.color = '#6b7280';
+                
+                viewSend.classList.remove('hidden-view');
+                viewReceive.classList.add('hidden-view');
+                stopScanner();
+            } else {
+                btnTabReceive.style.backgroundColor = 'black';
+                btnTabReceive.style.color = 'white';
+                btnTabSend.style.backgroundColor = 'transparent';
+                btnTabSend.style.color = '#6b7280';
+                
+                viewReceive.classList.remove('hidden-view');
+                viewSend.classList.add('hidden-view');
+                stopBroadcast();
+            }
+        }
+        switchTab('send');
+
+        // --- SENDER LOGIC ---
+        document.getElementById('file-input').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            fileName = file.name;
+            fileType = file.type || 'application/octet-stream';
+            document.getElementById('file-name-label').textContent = fileName;
+            
+            const buffer = await file.arrayBuffer();
+            const bytes = new Uint8Array(buffer);
+            
+            const totalChunks = Math.ceil(bytes.length / CHUNK_SIZE);
+            const fileId = Math.floor(Math.random() * 10000).toString();
+            
+            chunks = [];
+            for (let i = 0; i < totalChunks; i++) {
+                const start = i * CHUNK_SIZE;
+                const end = Math.min(start + CHUNK_SIZE, bytes.length);
+                const chunkBytes = bytes.slice(start, end);
+                const b64 = bytesToBase64(chunkBytes);
+                // Payload format: FQR | ID | Total | Index | Base64 | FileName | MimeType
+                chunks.push(`FQR|${fileId}|${totalChunks}|${i}|${b64}|${fileName}|${fileType}`);
+            }
+            
+            document.getElementById('qr-container').classList.remove('hidden');
+            document.getElementById('qr-container').classList.add('flex');
+            document.getElementById('send-status').textContent = `Ready: ${chunks.length} chunks`;
+        });
+
+        document.getElementById('btn-start-send').addEventListener('click', startBroadcast);
+        document.getElementById('btn-stop-send').addEventListener('click', stopBroadcast);
+
+        function startBroadcast() {
+            if (chunks.length === 0) return;
+            document.getElementById('btn-start-send').classList.add('hidden');
+            document.getElementById('btn-stop-send').classList.remove('hidden');
+            
+            currentChunkIdx = 0;
+            sendInterval = setInterval(renderNextQR, 1000 / FPS);
+        }
+
+        function stopBroadcast() {
+            if (sendInterval) clearInterval(sendInterval);
+            sendInterval = null;
+            document.getElementById('btn-start-send').classList.remove('hidden');
+            document.getElementById('btn-stop-send').classList.add('hidden');
+        }
+
+        function renderNextQR() {
+            const text = chunks[currentChunkIdx];
+            QRCode.toCanvas(document.getElementById('qr-canvas'), text, {
+                width: 300,
+                margin: 2,
+                color: { dark: '#000000', light: '#ffffff' },
+                errorCorrectionLevel: 'L'
+            }, (error) => {
+                if (error) console.error(error);
+            });
+            
+            document.getElementById('send-status').textContent = `Transmitting: ${currentChunkIdx + 1} / ${chunks.length}`;
+            currentChunkIdx = (currentChunkIdx + 1) % chunks.length;
+        }
+
+        function bytesToBase64(bytes) {
+            let binary = '';
+            for (let i = 0; i < bytes.byteLength; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return window.btoa(binary);
+        }
+
+        // --- RECEIVER LOGIC ---
+        document.getElementById('btn-start-receive').addEventListener('click', startScanner);
+        document.getElementById('btn-stop-receive').addEventListener('click', stopScanner);
+
+        let outFileName = 'downloaded_file';
+        let outFileType = 'application/octet-stream';
+
+        function startScanner() {
+            document.getElementById('btn-start-receive').classList.add('hidden');
+            document.getElementById('btn-stop-receive').classList.remove('hidden');
+            document.getElementById('receive-progress-container').classList.remove('hidden');
+            document.getElementById('btn-download').classList.add('hidden');
+            
+            receivedChunks = {};
+            expectedTotal = 0;
+            currentFileId = null;
+            updateProgressUI();
+
+            html5QrCode = new Html5Qrcode("reader");
+            html5QrCode.start(
+                { facingMode: "environment" },
+                { fps: 30, qrbox: { width: 250, height: 250 } }, // Scanner checks frames at 30fps to capture the 15fps source smoothly
+                onScanSuccess,
+                (errorMessage) => { /* Ignore frame noise */ }
+            ).catch(err => {
+                alert("Camera error: " + err);
+                stopScanner();
+            });
+        }
+
+        function stopScanner() {
+            if (html5QrCode) {
+                html5QrCode.stop().then(() => {
+                    html5QrCode.clear();
+                    html5QrCode = null;
+                }).catch(err => console.log(err));
+            }
+            document.getElementById('btn-start-receive').classList.remove('hidden');
+            document.getElementById('btn-stop-receive').classList.add('hidden');
+        }
+
+        function onScanSuccess(decodedText, decodedResult) {
+            if (!decodedText.startsWith('FQR|')) return;
+            
+            const parts = decodedText.split('|');
+            if (parts.length < 5) return;
+            
+            const fId = parts[1];
+            const tChunks = parseInt(parts[2], 10);
+            const cIdx = parseInt(parts[3], 10);
+            const b64 = parts[4];
+            
+            if (parts.length >= 7) {
+                outFileName = parts[5];
+                outFileType = parts[6];
+            }
+            
+            if (currentFileId === null) {
+                currentFileId = fId;
+                expectedTotal = tChunks;
+            }
+            
+            if (currentFileId === fId && !receivedChunks[cIdx]) {
+                receivedChunks[cIdx] = b64;
+                updateProgressUI();
+                
+                if (Object.keys(receivedChunks).length === expectedTotal) {
+                    stopScanner();
+                    assembleAndShowDownload();
+                }
+            }
+        }
+
+        function updateProgressUI() {
+            const count = Object.keys(receivedChunks).length;
+            let pct = 0;
+            if (expectedTotal > 0) {
+                pct = Math.round((count / expectedTotal) * 100);
+            }
+            document.getElementById('receive-status').textContent = expectedTotal > 0 ? `${count} / ${expectedTotal}` : 'Awaiting sync...';
+            document.getElementById('receive-percentage').textContent = `${pct}%`;
+            document.getElementById('receive-bar').style.width = `${pct}%`;
+        }
+
+        function assembleAndShowDownload() {
+            document.getElementById('receive-status').textContent = 'Assembly Complete!';
+            document.getElementById('btn-download').classList.remove('hidden');
+            
+            document.getElementById('btn-download').onclick = () => {
+                const totalArray = [];
+                for (let i = 0; i < expectedTotal; i++) {
+                    const b64 = receivedChunks[i];
+                    if (!b64) {
+                        alert("Error: Missing chunk " + i);
+                        return;
+                    }
+                    const binary = window.atob(b64);
+                    const bytes = new Uint8Array(binary.length);
+                    for (let j = 0; j < binary.length; j++) {
+                        bytes[j] = binary.charCodeAt(j);
+                    }
+                    totalArray.push(bytes);
+                }
+                
+                const blob = new Blob(totalArray, { type: outFileType });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = outFileName;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
+        }
+    </script>
+</body>
+</html>
