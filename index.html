@@ -3,21 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Minimal QR Transfer</title>
+    <title>High-Speed QR Transfer</title>
     <!-- Tailwind CSS for minimalist, bright styling -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Fast, synchronous QR Code Generator -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
+    <!-- Robust QR Generator for High-Density Data -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
     <!-- HTML5 QR Code Scanner -->
     <script src="https://unpkg.com/html5-qrcode"></script>
     <style>
         body { font-family: 'Inter', system-ui, sans-serif; background: #ffffff; color: #000000; }
         .hidden-view { display: none !important; }
+        /* Remove the scan-region box to use the full camera feed */
+        #reader { border: none !important; }
+        #reader video { object-fit: cover !important; border-radius: 0.75rem; }
     </style>
 </head>
-<body class="max-w-md mx-auto p-6 flex flex-col min-h-screen">
-    <header class="mb-8 text-center">
-        <h1 class="text-2xl font-light tracking-wide">QR Transfer</h1>
+<body class="max-w-md mx-auto p-4 flex flex-col min-h-screen">
+    <header class="mb-6 text-center">
+        <h1 class="text-2xl font-light tracking-wide">High-Speed Transfer</h1>
     </header>
 
     <!-- Navigation Tabs -->
@@ -28,74 +31,65 @@
 
     <!-- Sender View -->
     <div id="view-send" class="flex flex-col items-center flex-1">
-        <label class="w-full border-2 border-dashed border-gray-300 rounded-xl p-8 text-center cursor-pointer hover:border-gray-500 transition-colors">
+        <label class="w-full border-2 border-dashed border-gray-300 rounded-xl p-6 text-center cursor-pointer hover:border-gray-500 transition-colors">
             <span class="text-gray-500 font-medium" id="file-name-label">Tap to select a file</span>
             <input type="file" id="file-input" class="hidden">
         </label>
         
-        <p id="file-warning" class="text-xs text-red-500 mt-2 text-center hidden">
-            Large file detected. Optical transfer is slow and may take several minutes.
-        </p>
-
-        <div id="qr-container" class="mt-6 hidden flex-col items-center w-full">
-            <div class="p-2 border border-gray-100 rounded-xl shadow-sm w-full flex items-center justify-center bg-white aspect-square max-w-[320px]">
+        <div id="qr-container" class="mt-4 hidden flex-col items-center w-full">
+            <!-- Maximized width for high-density QR -->
+            <div class="p-1 border border-gray-100 rounded-xl shadow-sm w-full max-w-[400px] aspect-square flex items-center justify-center bg-white">
                 <img id="qr-img" class="w-full h-full object-contain" alt="QR Frame" />
             </div>
-            <p id="send-status" class="mt-4 text-sm text-gray-600 font-mono tracking-tight"></p>
-            <p class="text-xs text-gray-400 mt-1">Balanced density @ 10 FPS</p>
             
-            <button id="btn-start-send" class="mt-6 w-full py-3 bg-black text-white rounded-lg font-medium">Start Broadcast</button>
-            <button id="btn-stop-send" class="mt-2 w-full py-3 bg-gray-100 text-black rounded-lg font-medium hidden">Stop Broadcast</button>
+            <div class="flex flex-col items-center mt-4">
+                <p id="send-status" class="text-lg font-mono font-bold tracking-tight"></p>
+                <p class="text-xs text-gray-500 mt-1">High-Density Mode @ 15 FPS</p>
+            </div>
+            
+            <button id="btn-start-send" class="mt-6 w-full py-4 bg-black text-white rounded-xl font-bold text-lg">Start Broadcast</button>
+            <button id="btn-stop-send" class="mt-2 w-full py-4 bg-gray-100 text-black rounded-xl font-bold text-lg hidden">Stop Broadcast</button>
         </div>
     </div>
 
     <!-- Receiver View -->
     <div id="view-receive" class="hidden-view flex-col items-center flex-1 w-full">
-        <!-- Removed arbitrary width/height limits to allow full-frame scanning -->
-        <div id="reader" class="w-full overflow-hidden rounded-xl border border-gray-200 shadow-sm bg-gray-50 min-h-[300px]"></div>
+        <!-- Full-width camera reader for capturing dense QRs -->
+        <div id="reader" class="w-full aspect-[3/4] overflow-hidden rounded-xl bg-black shadow-lg"></div>
         
         <div id="receive-progress-container" class="w-full mt-6 hidden">
-            <div class="flex justify-between text-sm mb-2 font-mono text-gray-600">
+            <div class="flex justify-between text-sm mb-2 font-mono text-gray-600 font-bold">
                 <span id="receive-status">Receiving...</span>
                 <span id="receive-percentage">0%</span>
             </div>
-            <div class="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-                <div id="receive-bar" class="h-full bg-black w-0 transition-all duration-100"></div>
+            <div class="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
+                <div id="receive-bar" class="h-full bg-black w-0 transition-all duration-75"></div>
             </div>
         </div>
         
-        <button id="btn-start-receive" class="mt-8 w-full py-3 bg-black text-white rounded-lg font-medium">Start Scanner</button>
-        <button id="btn-stop-receive" class="mt-2 w-full py-3 bg-red-50 text-red-600 rounded-lg font-medium hidden">Stop Scanner</button>
-        <button id="btn-download" class="mt-6 w-full py-3 bg-black text-white rounded-lg font-medium hidden">Save File</button>
+        <button id="btn-start-receive" class="mt-8 w-full py-4 bg-black text-white rounded-xl font-bold text-lg">Open Camera Scanner</button>
+        <button id="btn-stop-receive" class="mt-2 w-full py-4 bg-red-50 text-red-600 rounded-xl font-bold text-lg hidden">Stop Scanner</button>
+        <button id="btn-download" class="mt-6 w-full py-4 bg-green-500 text-white rounded-xl font-bold text-lg hidden shadow-md shadow-green-200">Save File</button>
     </div>
 
     <script>
-        // State variables
         let mode = 'send';
         
-        // Sender constraints optimized for phone cameras
-        const FPS = 10;
-        const CHUNK_SIZE = 400; // Balanced size for reliable optical scanning
+        // --- PERFORMANCE OVERDRIVE SETTINGS ---
+        const FPS = 15; 
+        const CHUNK_SIZE = 1200; // 3x more data per frame! Drastically reduces frame count.
         
         let chunks = [];
         let currentChunkIdx = 0;
         let isBroadcasting = false;
         let fileName = '';
         let fileType = '';
-        
-        // QRious instance (Higher resolution for sharpness on dense data)
-        const qrGenerator = new QRious({
-            size: 512,
-            level: 'L'
-        });
 
-        // Receiver state
         let html5QrCode = null;
         let receivedChunks = {};
         let expectedTotal = 0;
         let currentFileId = null;
 
-        // UI Tabs Initialization
         const viewSend = document.getElementById('view-send');
         const viewReceive = document.getElementById('view-receive');
         const btnTabSend = document.getElementById('btn-tab-send');
@@ -111,7 +105,6 @@
                 btnTabSend.style.color = 'white';
                 btnTabReceive.style.backgroundColor = 'transparent';
                 btnTabReceive.style.color = '#6b7280';
-                
                 viewSend.classList.remove('hidden-view');
                 viewReceive.classList.add('hidden-view');
                 stopScanner();
@@ -120,7 +113,6 @@
                 btnTabReceive.style.color = 'white';
                 btnTabSend.style.backgroundColor = 'transparent';
                 btnTabSend.style.color = '#6b7280';
-                
                 viewReceive.classList.remove('hidden-view');
                 viewSend.classList.add('hidden-view');
                 stopBroadcast();
@@ -128,7 +120,7 @@
         }
         switchTab('send');
 
-        // --- SENDER LOGIC ---
+        // --- SENDER ---
         document.getElementById('file-input').addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
@@ -136,13 +128,6 @@
             fileName = file.name;
             fileType = file.type || 'application/octet-stream';
             document.getElementById('file-name-label').textContent = fileName;
-            
-            // Show warning for files larger than 1MB
-            if (file.size > 1024 * 1024) {
-                document.getElementById('file-warning').classList.remove('hidden');
-            } else {
-                document.getElementById('file-warning').classList.add('hidden');
-            }
             
             const buffer = await file.arrayBuffer();
             const bytes = new Uint8Array(buffer);
@@ -161,9 +146,7 @@
             
             document.getElementById('qr-container').classList.remove('hidden');
             document.getElementById('qr-container').classList.add('flex');
-            document.getElementById('send-status').textContent = `Ready: ${chunks.length} chunks`;
             
-            // Render the first frame statically
             if (chunks.length > 0) {
                 renderQR(0);
             }
@@ -188,25 +171,25 @@
             document.getElementById('btn-stop-send').classList.add('hidden');
         }
 
-        function renderQR(index) {
-            qrGenerator.value = chunks[index];
-            document.getElementById('qr-img').src = qrGenerator.toDataURL();
-            document.getElementById('send-status').textContent = `Transmitting: ${index + 1} / ${chunks.length}`;
+        async function renderQR(index) {
+            try {
+                // High resolution (width: 800) to ensure the highly-dense modules are crisp
+                const url = await QRCode.toDataURL(chunks[index], { width: 800, margin: 2, errorCorrectionLevel: 'L' });
+                document.getElementById('qr-img').src = url;
+                document.getElementById('send-status').textContent = `${index + 1} / ${chunks.length}`;
+            } catch (err) {
+                console.error("Frame generation error:", err);
+            }
         }
 
         function broadcastLoop() {
             if (!isBroadcasting) return;
-
-            try {
-                renderQR(currentChunkIdx);
+            renderQR(currentChunkIdx).then(() => {
                 currentChunkIdx = (currentChunkIdx + 1) % chunks.length;
-            } catch (err) {
-                console.error("Frame generation error:", err);
-            }
-            
-            if (isBroadcasting) {
-                setTimeout(broadcastLoop, 1000 / FPS);
-            }
+                if (isBroadcasting) {
+                    setTimeout(broadcastLoop, 1000 / FPS);
+                }
+            });
         }
 
         function bytesToBase64(bytes) {
@@ -217,7 +200,7 @@
             return window.btoa(binary);
         }
 
-        // --- RECEIVER LOGIC ---
+        // --- RECEIVER ---
         document.getElementById('btn-start-receive').addEventListener('click', startScanner);
         document.getElementById('btn-stop-receive').addEventListener('click', stopScanner);
 
@@ -237,16 +220,17 @@
 
             html5QrCode = new Html5Qrcode("reader");
             
-            // Highly optimized scanner settings
             html5QrCode.start(
                 { facingMode: "environment" },
                 { 
-                    fps: 20, // Check frames rapidly
-                    disableFlip: true, // Speeds up processing
-                    formatsToSupport: [ Html5QrcodeSupportedFormats.QR_CODE ] // Ignore barcodes to save CPU
+                    fps: 30, // Scan up to 30 times a second to catch the 15 FPS source
+                    disableFlip: false, 
+                    formatsToSupport: [ Html5QrcodeSupportedFormats.QR_CODE ],
+                    // Force the camera to use 1080p/4K resolution to see the dense QR code clearly
+                    videoConstraints: { width: { ideal: 1920 }, height: { ideal: 1080 } }
                 }, 
                 onScanSuccess,
-                (errorMessage) => { /* Ignore noisy frames */ }
+                (errorMessage) => { }
             ).catch(err => {
                 alert("Camera error: " + err);
                 stopScanner();
@@ -264,7 +248,7 @@
             document.getElementById('btn-stop-receive').classList.add('hidden');
         }
 
-        function onScanSuccess(decodedText, decodedResult) {
+        function onScanSuccess(decodedText) {
             if (!decodedText.startsWith('FQR|')) return;
             
             const parts = decodedText.split('|');
