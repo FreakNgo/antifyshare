@@ -21,7 +21,7 @@
     </header>
 
     <!-- Navigation Tabs -->
-    <div class="flex border border-gray-200 rounded-lg p-1 mb-8 text-sm">
+    <div class="flex border border-gray-200 rounded-lg p-1 mb-6 text-sm">
         <button id="btn-tab-send" class="flex-1 py-2 bg-black text-white rounded-md transition-colors">Send</button>
         <button id="btn-tab-receive" class="flex-1 py-2 text-gray-500 rounded-md transition-colors">Receive</button>
     </div>
@@ -32,14 +32,17 @@
             <span class="text-gray-500 font-medium" id="file-name-label">Tap to select a file</span>
             <input type="file" id="file-input" class="hidden">
         </label>
+        
+        <p id="file-warning" class="text-xs text-red-500 mt-2 text-center hidden">
+            Large file detected. Optical transfer is slow and may take several minutes.
+        </p>
 
-        <div id="qr-container" class="mt-8 hidden flex-col items-center w-full">
-            <div class="p-2 border border-gray-100 rounded-xl shadow-sm min-w-[272px] min-h-[272px] flex items-center justify-center bg-white">
-                <!-- Using an img tag to prevent Canvas WebGL context collisions -->
-                <img id="qr-img" class="w-64 h-64 object-contain" alt="QR Frame" />
+        <div id="qr-container" class="mt-6 hidden flex-col items-center w-full">
+            <div class="p-2 border border-gray-100 rounded-xl shadow-sm w-full flex items-center justify-center bg-white aspect-square max-w-[320px]">
+                <img id="qr-img" class="w-full h-full object-contain" alt="QR Frame" />
             </div>
             <p id="send-status" class="mt-4 text-sm text-gray-600 font-mono tracking-tight"></p>
-            <p class="text-xs text-gray-400 mt-1">High-density packets @ 20 FPS</p>
+            <p class="text-xs text-gray-400 mt-1">Balanced density @ 10 FPS</p>
             
             <button id="btn-start-send" class="mt-6 w-full py-3 bg-black text-white rounded-lg font-medium">Start Broadcast</button>
             <button id="btn-stop-send" class="mt-2 w-full py-3 bg-gray-100 text-black rounded-lg font-medium hidden">Stop Broadcast</button>
@@ -48,7 +51,8 @@
 
     <!-- Receiver View -->
     <div id="view-receive" class="hidden-view flex-col items-center flex-1 w-full">
-        <div id="reader" class="w-full overflow-hidden rounded-xl border border-gray-200 shadow-sm bg-gray-50"></div>
+        <!-- Removed arbitrary width/height limits to allow full-frame scanning -->
+        <div id="reader" class="w-full overflow-hidden rounded-xl border border-gray-200 shadow-sm bg-gray-50 min-h-[300px]"></div>
         
         <div id="receive-progress-container" class="w-full mt-6 hidden">
             <div class="flex justify-between text-sm mb-2 font-mono text-gray-600">
@@ -69,9 +73,9 @@
         // State variables
         let mode = 'send';
         
-        // Sender constraints
-        const FPS = 20;
-        const CHUNK_SIZE = 800; // Increased to 800 bytes for faster large file transfers
+        // Sender constraints optimized for phone cameras
+        const FPS = 10;
+        const CHUNK_SIZE = 400; // Balanced size for reliable optical scanning
         
         let chunks = [];
         let currentChunkIdx = 0;
@@ -79,9 +83,9 @@
         let fileName = '';
         let fileType = '';
         
-        // QRious instance (reused for performance)
+        // QRious instance (Higher resolution for sharpness on dense data)
         const qrGenerator = new QRious({
-            size: 350,
+            size: 512,
             level: 'L'
         });
 
@@ -132,6 +136,13 @@
             fileName = file.name;
             fileType = file.type || 'application/octet-stream';
             document.getElementById('file-name-label').textContent = fileName;
+            
+            // Show warning for files larger than 1MB
+            if (file.size > 1024 * 1024) {
+                document.getElementById('file-warning').classList.remove('hidden');
+            } else {
+                document.getElementById('file-warning').classList.add('hidden');
+            }
             
             const buffer = await file.arrayBuffer();
             const bytes = new Uint8Array(buffer);
@@ -193,7 +204,6 @@
                 console.error("Frame generation error:", err);
             }
             
-            // Schedule the next frame synchronously to ensure memory stability
             if (isBroadcasting) {
                 setTimeout(broadcastLoop, 1000 / FPS);
             }
@@ -226,11 +236,17 @@
             updateProgressUI();
 
             html5QrCode = new Html5Qrcode("reader");
+            
+            // Highly optimized scanner settings
             html5QrCode.start(
                 { facingMode: "environment" },
-                { fps: 30, qrbox: { width: 250, height: 250 } }, 
+                { 
+                    fps: 20, // Check frames rapidly
+                    disableFlip: true, // Speeds up processing
+                    formatsToSupport: [ Html5QrcodeSupportedFormats.QR_CODE ] // Ignore barcodes to save CPU
+                }, 
                 onScanSuccess,
-                (errorMessage) => { /* Ignored */ }
+                (errorMessage) => { /* Ignore noisy frames */ }
             ).catch(err => {
                 alert("Camera error: " + err);
                 stopScanner();
