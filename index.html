@@ -6,8 +6,8 @@
     <title>Minimal QR Transfer</title>
     <!-- Tailwind CSS for minimalist, bright styling -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- QR Code Generator -->
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+    <!-- Fast, synchronous QR Code Generator -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
     <!-- HTML5 QR Code Scanner -->
     <script src="https://unpkg.com/html5-qrcode"></script>
     <style>
@@ -34,12 +34,12 @@
         </label>
 
         <div id="qr-container" class="mt-8 hidden flex-col items-center w-full">
-            <div class="p-2 border border-gray-100 rounded-xl shadow-sm min-w-[272px] min-h-[272px] flex items-center justify-center">
-                <!-- Switched to img to prevent Canvas WebGL context collisions on fast updates -->
+            <div class="p-2 border border-gray-100 rounded-xl shadow-sm min-w-[272px] min-h-[272px] flex items-center justify-center bg-white">
+                <!-- Using an img tag to prevent Canvas WebGL context collisions -->
                 <img id="qr-img" class="w-64 h-64 object-contain" alt="QR Frame" />
             </div>
             <p id="send-status" class="mt-4 text-sm text-gray-600 font-mono tracking-tight"></p>
-            <p class="text-xs text-gray-400 mt-1">Locked at 15 FPS for low-end compatibility</p>
+            <p class="text-xs text-gray-400 mt-1">High-density packets @ 20 FPS</p>
             
             <button id="btn-start-send" class="mt-6 w-full py-3 bg-black text-white rounded-lg font-medium">Start Broadcast</button>
             <button id="btn-stop-send" class="mt-2 w-full py-3 bg-gray-100 text-black rounded-lg font-medium hidden">Stop Broadcast</button>
@@ -70,14 +70,20 @@
         let mode = 'send';
         
         // Sender constraints
-        const FPS = 15;
-        const CHUNK_SIZE = 300; 
+        const FPS = 20;
+        const CHUNK_SIZE = 800; // Increased to 800 bytes for faster large file transfers
         
         let chunks = [];
         let currentChunkIdx = 0;
         let isBroadcasting = false;
         let fileName = '';
         let fileType = '';
+        
+        // QRious instance (reused for performance)
+        const qrGenerator = new QRious({
+            size: 350,
+            level: 'L'
+        });
 
         // Receiver state
         let html5QrCode = null;
@@ -146,14 +152,9 @@
             document.getElementById('qr-container').classList.add('flex');
             document.getElementById('send-status').textContent = `Ready: ${chunks.length} chunks`;
             
-            // Render the first frame statically so it's not blank before pressing start
+            // Render the first frame statically
             if (chunks.length > 0) {
-                try {
-                    const url = await QRCode.toDataURL(chunks[0], { width: 300, margin: 2, errorCorrectionLevel: 'L' });
-                    document.getElementById('qr-img').src = url;
-                } catch (err) {
-                    console.error("Initial render failed", err);
-                }
+                renderQR(0);
             }
         });
 
@@ -167,7 +168,7 @@
             
             currentChunkIdx = 0;
             isBroadcasting = true;
-            broadcastLoop(); // Start async recursive loop
+            broadcastLoop();
         }
 
         function stopBroadcast() {
@@ -176,30 +177,23 @@
             document.getElementById('btn-stop-send').classList.add('hidden');
         }
 
-        // Use async/await and setTimeout instead of setInterval to prevent rendering overlap and event loop flooding
-        async function broadcastLoop() {
+        function renderQR(index) {
+            qrGenerator.value = chunks[index];
+            document.getElementById('qr-img').src = qrGenerator.toDataURL();
+            document.getElementById('send-status').textContent = `Transmitting: ${index + 1} / ${chunks.length}`;
+        }
+
+        function broadcastLoop() {
             if (!isBroadcasting) return;
 
-            const text = chunks[currentChunkIdx];
-            
             try {
-                // toDataURL is much safer than toCanvas for high-frequency updates
-                const url = await QRCode.toDataURL(text, {
-                    width: 300,
-                    margin: 2,
-                    color: { dark: '#000000', light: '#ffffff' },
-                    errorCorrectionLevel: 'L'
-                });
-                
-                document.getElementById('qr-img').src = url;
-                document.getElementById('send-status').textContent = `Transmitting: ${currentChunkIdx + 1} / ${chunks.length}`;
-                
+                renderQR(currentChunkIdx);
                 currentChunkIdx = (currentChunkIdx + 1) % chunks.length;
             } catch (err) {
                 console.error("Frame generation error:", err);
             }
             
-            // Schedule the next frame ONLY after this one has successfully processed
+            // Schedule the next frame synchronously to ensure memory stability
             if (isBroadcasting) {
                 setTimeout(broadcastLoop, 1000 / FPS);
             }
