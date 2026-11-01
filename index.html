@@ -79,7 +79,7 @@ footer a{color:var(--mut)}
 
 <section id="home" class="choose">
   <button class="big send" id="goSend"><b>Send files</b><span>Photos, videos, PDFs, text. This device shows a QR code.</span></button>
-  <button class="big recv" id="goRecv"><b>Receive files</b><span>Scan the sender’s QR code with this device’s camera.</span></button>
+  <button class="big recv" id="goRecv"><b>Receive files</b><span>Scan the sender’s QR code with your phone’s camera or Google Lens. No app needed.</span></button>
 </section>
 
 <section id="sendPane" hidden>
@@ -259,12 +259,6 @@ async function unpack(str) {
   if (str[2] === '1') bytes = new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
   return new TextDecoder().decode(bytes);
 }
-async function drawQR(sdp) {
-  const code = await pack(sdp), box = $('#qrbox'); box.innerHTML = '';
-  if (!window.QRCode) throw new Error('QR library failed to load. Check your internet connection and reload.');
-  new QRCode(box, { text: code, width: 320, height: 320, correctLevel: QRCode.CorrectLevel.L });
-}
-
 /* ---------- QR scanning (BarcodeDetector, jsQR fallback) ---------- */
 let camStream = null;
 async function scanFor(cb) {
@@ -291,35 +285,91 @@ async function scanFor(cb) {
 }
 function stopScan() { camStream && camStream.getTracks().forEach(t => t.stop()); camStream = null; $('#cam').hidden = true; }
 
-/* ---------- pairing flows ---------- */
+/* ---------- pairing: one scan, via an encrypted relay ---------- */
+const NTFY = 'https://ntfy.sh';
+const APP_URL = location.protocol.startsWith('http') ? location.origin + location.pathname : 'https://antifyshare.vercel.app/';
+const HASH_RE = /^#[0-9a-f]{12}\.[A-Za-z0-9_-]{22}$/;
+let es = null, sess = 0;
+
+const u8url = u => b64(u).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const urlu8 = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+const importKey = raw => crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+async function encrypt(key, text) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(text)));
+  const o = new Uint8Array(12 + ct.length); o.set(iv); o.set(ct, 12); return u8url(o);
+}
+async function decrypt(key, s) {
+  const o = urlu8(s);
+  return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: o.slice(0, 12) }, key, o.slice(12)));
+}
+async function ntfyPost(topic, text) {
+  const r = await fetch(NTFY + '/' + topic, { method: 'POST', body: text });
+  if (!r.ok) throw new Error('Pairing relay unavailable (' + r.status + ')');
+}
+/** Resolves with the first message published on a relay topic (including ones sent just before). */
+function ntfyWait(topic, ms) {
+  return new Promise((res, rej) => {
+    es && es.close();
+    const e = es = new EventSource(NTFY + '/' + topic + '/sse?since=all');
+    const t = setTimeout(() => { e.close(); rej(new Error('Timed out waiting for the other device')); }, ms);
+    e.onmessage = ev => { try { const m = JSON.parse(ev.data); if (m.event === 'message') { clearTimeout(t); e.close(); res(m.message); } } catch {} };
+  });
+}
+function drawQR(text) {
+  const box = $('#qrbox'); box.innerHTML = '';
+  if (!window.QRCode) throw new Error('QR library failed to load. Check your internet connection and reload.');
+  new QRCode(box, { text, width: 300, height: 300, correctLevel: QRCode.CorrectLevel.M });
+}
+
+/** Sender: publish an encrypted offer, show a QR link, wait for the receiver's encrypted answer. */
 async function startSend() {
   if (!queue.length) return toast('Add at least one file first', true);
+  const my = ++sess;
   try {
     setStage({ title: 'Creating QR code…' });
     await Promise.all(queue.map(i => i.busy));
     initPeerConnection('host');
     await pc.setLocalDescription(await pc.createOffer());
-    await gather(); await drawQR(pc.localDescription.sdp);
-    setStage({ title: 'Receiver: scan this QR code', text: 'On the other device, open Antify Share, tap Receive and point its camera here. When it shows its own QR code, tap Next.', qr: true,
-      btn: ['Next: scan receiver’s QR', () => {
-        setStage({ title: 'Scan the receiver’s QR code', text: 'Point this device’s camera at the QR code on the receiver’s screen.', cam: true });
-        scanFor(async code => { const sdp = await unpack(code); stopScan(); await pc.setRemoteDescription({ type: 'answer', sdp }); setStage({ title: 'Connecting…' }); });
-      }] });
-  } catch (e) { toast(e.message, true); }
-}
-function startReceive() {
-  setStage({ title: 'Scan the sender’s QR code', text: 'Point this device’s camera at the QR code on the sender’s screen.', cam: true });
-  scanFor(async code => {
-    const sdp = await unpack(code); stopScan();
+    await gather();
+    const raw = crypto.getRandomValues(new Uint8Array(16)), key = await importKey(raw);
+    const topic = Array.from(crypto.getRandomValues(new Uint8Array(6)), b => b.toString(16).padStart(2, '0')).join('');
+    await ntfyPost(topic + 'o', await encrypt(key, await pack(pc.localDescription.sdp)));
+    drawQR(APP_URL + '#' + topic + '.' + u8url(raw));
+    setStage({ title: 'Receiver: scan this QR code', text: 'Use the phone’s camera or Google Lens. Files start sending as soon as the link opens.', qr: true });
+    const ans = await ntfyWait(topic + 'a', 300000);
+    if (my !== sess) return;
+    await pc.setRemoteDescription({ type: 'answer', sdp: await unpack(await decrypt(key, ans)) });
     setStage({ title: 'Connecting…' });
+  } catch (e) { if (my === sess) setStage({ title: 'Could not connect', text: e.message, btn: ['Start over', reset] }); }
+}
+
+/** Receiver: open the scanned link, fetch + decrypt the offer, post back an encrypted answer. */
+async function joinFromLink(hash) {
+  const my = ++sess, [topic, k] = hash.slice(1).split('.');
+  show('recv'); setStage({ title: 'Connecting…', text: 'Getting connection details from the sender.' });
+  try {
+    const key = await importKey(urlu8(k));
+    const sdp = await unpack(await decrypt(key, await ntfyWait(topic + 'o', 20000)));
+    if (my !== sess) return;
     initPeerConnection('guest');
     await pc.setRemoteDescription({ type: 'offer', sdp });
     await pc.setLocalDescription(await pc.createAnswer());
-    await gather(); await drawQR(pc.localDescription.sdp);
-    setStage({ title: 'Show this QR code to the sender', text: 'The sender taps Next and scans this code. Transfer starts automatically.', qr: true });
+    await gather();
+    await ntfyPost(topic + 'a', await encrypt(key, await pack(pc.localDescription.sdp)));
+    if (my === sess) setStage({ title: 'Connecting…', text: 'Keep this page open. Files will appear here.' });
+  } catch (e) { if (my === sess) setStage({ title: 'Could not connect', text: e.message + '. Ask the sender to create a new QR code.', btn: ['Start over', reset] }); }
+}
+/** In-app scanner (optional): reads the same link from a QR code. */
+function startReceive() {
+  setStage({ title: 'Scan the sender’s QR code', text: 'Point this device’s camera at the QR code on the sender’s screen.', cam: true });
+  scanFor(async txt => {
+    const h = '#' + (txt.split('#')[1] || '');
+    if (!HASH_RE.test(h)) throw new Error('bad code');
+    stopScan(); joinFromLink(h);
   });
 }
-function reset() { stopScan(); closePeer(); rx = null; sending = false; $('#prog').hidden = true; $('#stage').hidden = true; show('home'); }
+function reset() { sess++; es && es.close(); es = null; stopScan(); closePeer(); rx = null; sending = false; $('#prog').hidden = true; $('#stage').hidden = true; show('home'); }
 
 /* ---------- transfer ---------- */
 function startProgress(label, total) {
@@ -406,6 +456,7 @@ $('#goSend').onclick = () => show('send');
 $('#goRecv').onclick = () => { show('recv'); startReceive(); };
 $('#btnQR').onclick = startSend;
 $('#btnHome').onclick = reset;
+if (HASH_RE.test(location.hash)) { const h = location.hash; history.replaceState(null, '', location.pathname + location.search); joinFromLink(h); }
 window.addEventListener('beforeunload', () => { stopScan(); closePeer(); });
 </script>
 </body>
