@@ -37,6 +37,7 @@ a{color:#111}
 <h2>Third-party services</h2>
 <ul>
 <li>A public STUN server (stun.l.google.com) is contacted to help two devices find each other. It sees your IP address, but not your files.</li>
+<li>To pair devices with a single QR scan, a small connection message is passed through the public relay ntfy.sh. It is encrypted on your device with a key that exists only inside the QR code link (after the # sign, which browsers never send to a server), so the relay cannot read it. The relay sees your IP address and may keep the encrypted message for a short time. Files never pass through it.</li>
 <li>The QR code libraries (QRCode.js and jsQR) are loaded from cdnjs.cloudflare.com. Cloudflare may see your IP address when the page loads.</li>
 </ul>
 <p>These services have their own privacy policies.</p>
